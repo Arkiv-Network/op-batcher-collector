@@ -1,9 +1,15 @@
 # op-batcher-collector
 
-No-dependency Bun collector for the `admin_getThrottleController` JSON-RPC
+Standard-library Rust collector for the `admin_getThrottleController` JSON-RPC
 method.
 
-The collector polls once per UTC datetime second and stores entries by second:
+The collector uses two long-running threads:
+
+- a query thread that polls the configured JSON-RPC endpoint once per UTC
+  datetime second
+- a web thread that serves the HTTP API and spawns short-lived request handlers
+
+Entries are retained by second:
 
 ```json
 {
@@ -23,7 +29,7 @@ entries instead of crashing the process.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `BATCHER_RPC_URL` | `http://host.docker.internal:8548` | JSON-RPC endpoint to poll. |
+| `BATCHER_RPC_URL` | `http://host.docker.internal:8548` | Plain HTTP JSON-RPC endpoint to poll. |
 | `HISTORY_SIZE` | `5000` | Number of datetime-second entries to retain. |
 | `COLLECTOR_LISTEN_HOST` | `0.0.0.0` | HTTP API listen host. |
 | `COLLECTOR_LISTEN_PORT` | `28881` | HTTP API listen port. |
@@ -31,13 +37,13 @@ entries instead of crashing the process.
 ## Build and run locally
 
 ```sh
-npm install
-npm run build
-bun dist/collector.js
+cargo build --release
+./target/release/op-batcher-collector
 ```
 
-The published package is built from TypeScript and exports `dist/collector.js`
-with matching declaration files.
+The RPC client intentionally uses only Rust's standard library, so
+`BATCHER_RPC_URL` must use `http://`. TLS-backed `https://` RPC endpoints need a
+local plain-HTTP proxy or a future implementation that permits TLS crates.
 
 ## Run with Docker
 
@@ -70,6 +76,7 @@ docker run --rm -p 28881:28881 \
 | Endpoint | Description |
 | --- | --- |
 | `GET /health` | Collector status and retained range. |
+| `GET /status` | Alias for `/health`. |
 | `GET /latest` | Latest retained entry. |
 | `GET /history` | Full retained history keyed by datetime second. |
 | `GET /history?second=2026-05-21T10:00:00Z` | Lookup one retained second. |

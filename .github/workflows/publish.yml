@@ -1,4 +1,4 @@
-name: Publish package
+name: Publish collector
 
 on:
   push:
@@ -20,54 +20,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      - name: Setup Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+          rustup component add clippy
 
-      - name: Install dependencies
-        run: npm ci --include=dev
+      - name: Format
+        run: cargo fmt --check
 
-      - name: Type check
-        run: npm run check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
-        run: npm test
+        run: cargo test
 
-  publish-npm:
-    name: Publish npm package
-    runs-on: ubuntu-latest
-    needs: validate
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: "@arkiv-network"
-
-      - name: Install dependencies
-        run: npm ci --include=dev
-
-      - name: Use snapshot version for main commits
-        if: github.ref_type == 'branch'
-        run: |
-          BASE_VERSION="$(node -p "require('./package.json').version.split('-')[0]")"
-          npm version --no-git-tag-version "${BASE_VERSION}-main.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-
-      - name: Publish to GitHub Packages
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            npm publish --tag latest
-          else
-            npm publish --tag main
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: cargo build --release --locked
 
   publish-docker:
     name: Publish Docker image
