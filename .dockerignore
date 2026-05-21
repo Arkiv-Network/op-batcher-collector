@@ -4,3 +4,4 @@ npm-debug.log
 bun.lockb
 *.log
 dist
+target

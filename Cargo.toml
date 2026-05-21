@@ -1,0 +1,12 @@
+[package]
+name = "op-batcher-collector"
+version = "1.0.0"
+edition = "2021"
+description = "Rust standard-library collector for the admin_getThrottleController JSON-RPC method."
+repository = "https://github.com/Arkiv-Network/op-batcher-collector"
+publish = false
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

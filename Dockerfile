@@ -1,17 +1,18 @@
-FROM node:22-slim AS build
+# Previous runtime reference: oven/bun:1
+
+FROM rust:1-slim AS build
 
 WORKDIR /app
 
-COPY package*.json tsconfig.json ./
-RUN npm ci --include=dev
+COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
-RUN npm run build
+RUN cargo build --release --locked
 
-FROM oven/bun:1
+FROM debian:bookworm-slim
 
 WORKDIR /app
 
-COPY --from=build /app/dist ./dist
+COPY --from=build /app/target/release/op-batcher-collector /usr/local/bin/op-batcher-collector
 
 ENV BATCHER_RPC_URL=http://host.docker.internal:8548
 ENV HISTORY_SIZE=5000
@@ -20,4 +21,4 @@ ENV COLLECTOR_LISTEN_PORT=28881
 
 EXPOSE 28881
 
-CMD ["bun", "dist/collector.js"]
+CMD ["op-batcher-collector"]
