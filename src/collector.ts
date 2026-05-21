@@ -273,17 +273,18 @@ export async function callThrottleController({
     }
 
     const rpcErrorPayload = isRecord(payload) ? payload.error : undefined;
-    if (isRecord(rpcErrorPayload)) {
+    if (rpcErrorPayload) {
+      const errorRecord = isRecord(rpcErrorPayload) ? rpcErrorPayload : null;
       const message =
-        typeof rpcErrorPayload.message === "string"
-          ? rpcErrorPayload.message
+        typeof errorRecord?.message === "string"
+          ? errorRecord.message
           : "RPC returned an error";
       const rpcError = new Error(message) as Error & {
         code?: unknown;
         data?: unknown;
       };
-      rpcError.code = rpcErrorPayload.code ?? "RPC_ERROR";
-      rpcError.data = rpcErrorPayload.data;
+      rpcError.code = errorRecord?.code ?? "RPC_ERROR";
+      rpcError.data = errorRecord?.data;
       throw rpcError;
     }
 
