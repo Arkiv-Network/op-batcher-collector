@@ -3,6 +3,7 @@ use std::env;
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,6 +14,7 @@ const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
 const DEFAULT_LISTEN_PORT: u16 = 28881;
 const RPC_TIMEOUT_MS: u64 = 900;
 const POLL_INTERVAL_MS: u64 = 250;
+const WEB_SERVER_WORKERS: usize = 4;
 
 #[derive(Clone, Debug)]
 struct Config {
@@ -479,16 +481,42 @@ fn run_server(shared: Arc<SharedCollector>) {
         ])
     );
 
+    let (sender, receiver) = mpsc::channel::<TcpStream>();
+    let receiver = Arc::new(Mutex::new(receiver));
+    for worker_id in 0..WEB_SERVER_WORKERS {
+        let worker_receiver = Arc::clone(&receiver);
+        let worker_shared = Arc::clone(&shared);
+        thread::Builder::new()
+            .name(format!("collector-http-worker-{worker_id}"))
+            .spawn(move || run_worker(worker_receiver, worker_shared))
+            .expect("failed to spawn collector http worker thread");
+    }
+
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                let request_shared = Arc::clone(&shared);
-                let _ = thread::Builder::new()
-                    .name("collector-http-request".to_string())
-                    .spawn(move || handle_connection(stream, request_shared));
+                if let Err(error) = sender.send(stream) {
+                    eprintln!("HTTP dispatch failed: {error}");
+                }
             }
             Err(error) => eprintln!("HTTP accept failed: {error}"),
         }
+    }
+}
+
+fn run_worker(receiver: Arc<Mutex<Receiver<TcpStream>>>, shared: Arc<SharedCollector>) {
+    loop {
+        let stream = {
+            let lock = match receiver.lock() {
+                Ok(lock) => lock,
+                Err(_) => return,
+            };
+            match lock.recv() {
+                Ok(stream) => stream,
+                Err(_) => return,
+            }
+        };
+        handle_connection(stream, Arc::clone(&shared));
     }
 }
 
