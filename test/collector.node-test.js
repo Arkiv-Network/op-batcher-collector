@@ -35,6 +35,16 @@ test("createConfig applies requested defaults", () => {
   assert.deepEqual(createConfig({}), {
     rpcUrl: "http://host.docker.internal:8548",
     historySize: 5000,
+    listenHost: "0.0.0.0",
+    listenPort: 28881,
+  });
+});
+
+test("createConfig applies requested listen host", () => {
+  assert.deepEqual(createConfig({ COLLECTOR_LISTEN_HOST: "127.0.0.1" }), {
+    rpcUrl: "http://host.docker.internal:8548",
+    historySize: 5000,
+    listenHost: "127.0.0.1",
     listenPort: 28881,
   });
 });
