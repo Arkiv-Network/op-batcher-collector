@@ -11,7 +11,7 @@ import {
   normalizeSecond,
   parsePositiveInteger,
   secondKey,
-} from "../src/collector.js";
+} from "../dist/collector.js";
 
 async function withJsonServer(handler) {
   const server = createServer(handler);
@@ -120,6 +120,32 @@ test("callThrottleController sends the expected JSON-RPC request", async () => {
     assert.deepEqual(result, { ok: 1 });
     assert.equal(rpcRequest.method, "admin_getThrottleController");
     assert.deepEqual(rpcRequest.params, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("callThrottleController treats truthy JSON-RPC error values as failures", async () => {
+  const server = await withJsonServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: "error-test", error: "denied" }));
+    });
+  });
+
+  try {
+    await assert.rejects(
+      callThrottleController({
+        rpcUrl: server.url,
+        id: "error-test",
+        timeoutMs: 500,
+      }),
+      {
+        message: "RPC returned an error",
+        code: "RPC_ERROR",
+      },
+    );
   } finally {
     await server.close();
   }
