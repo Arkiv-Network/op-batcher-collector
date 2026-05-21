@@ -1,10 +1,12 @@
+mod config;
 mod model;
 mod scraper;
 mod server;
 
 use std::sync::{Arc, Mutex};
 
-use model::{CollectorState, HistoryStore, SharedCollector, create_config, now_iso_second};
+use config::create_config;
+use model::{CollectorState, HistoryStore, SharedCollector, now_iso_second};
 
 fn main() {
     install_process_panic_handler();

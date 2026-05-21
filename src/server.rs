@@ -172,7 +172,8 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CollectorState, Config, HistoryStore, record_locked};
+    use crate::config::Config;
+    use crate::model::{CollectorState, HistoryStore, record_locked};
     use std::sync::Mutex;
 
     fn test_shared() -> Arc<SharedCollector> {

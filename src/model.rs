@@ -1,24 +1,10 @@
 use std::collections::VecDeque;
-use std::env;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-pub const DEFAULT_RPC_URL: &str = "http://host.docker.internal:8548";
-pub const DEFAULT_HISTORY_SIZE: usize = 5000;
-pub const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
-pub const DEFAULT_LISTEN_PORT: u16 = 28881;
-pub const DEFAULT_WEB_WORKERS: usize = 4;
-
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub rpc_url: String,
-    pub history_size: usize,
-    pub listen_host: String,
-    pub listen_port: u16,
-    pub web_workers: usize,
-}
+use crate::config::Config;
 
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
@@ -138,46 +124,6 @@ impl HistoryEntry {
         }
         value
     }
-}
-
-pub fn create_config() -> Config {
-    let rpc_url = env::var("BATCHER_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
-    let history_size = parse_positive_usize(
-        env::var("HISTORY_SIZE").ok().as_deref(),
-        DEFAULT_HISTORY_SIZE,
-    );
-    let listen_host =
-        env::var("COLLECTOR_LISTEN_HOST").unwrap_or_else(|_| DEFAULT_LISTEN_HOST.to_string());
-    let listen_port = parse_positive_u16(
-        env::var("COLLECTOR_LISTEN_PORT").ok().as_deref(),
-        DEFAULT_LISTEN_PORT,
-    );
-    let web_workers = parse_positive_usize(
-        env::var("COLLECTOR_WEB_WORKERS").ok().as_deref(),
-        DEFAULT_WEB_WORKERS,
-    );
-
-    Config {
-        rpc_url,
-        history_size,
-        listen_host,
-        listen_port,
-        web_workers,
-    }
-}
-
-fn parse_positive_usize(value: Option<&str>, fallback: usize) -> usize {
-    value
-        .and_then(|raw| raw.parse::<usize>().ok())
-        .filter(|parsed| *parsed > 0)
-        .unwrap_or(fallback)
-}
-
-fn parse_positive_u16(value: Option<&str>, fallback: u16) -> u16 {
-    value
-        .and_then(|raw| raw.parse::<u16>().ok())
-        .filter(|parsed| *parsed > 0)
-        .unwrap_or(fallback)
 }
 
 pub fn record_locked(
@@ -350,15 +296,6 @@ fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_positive_values_use_fallbacks_for_invalid_input() {
-        assert_eq!(parse_positive_usize(Some("42"), 1), 42);
-        assert_eq!(parse_positive_usize(Some("0"), 7), 7);
-        assert_eq!(parse_positive_usize(Some("abc"), 7), 7);
-        assert_eq!(parse_positive_u16(Some("28881"), 1), 28881);
-        assert_eq!(parse_positive_u16(Some("70000"), 9), 9);
-    }
 
     #[test]
     fn second_keys_are_utc_iso_seconds() {
