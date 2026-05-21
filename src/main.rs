@@ -3,14 +3,14 @@ mod scraper;
 mod server;
 
 use std::sync::{Arc, Mutex};
-use std::thread;
 
-use model::{create_config, now_iso_second, CollectorState, HistoryStore, SharedCollector};
+use model::{CollectorState, HistoryStore, SharedCollector, create_config, now_iso_second};
 
 fn main() {
     install_process_panic_handler();
 
     let config = create_config();
+    let worker_threads = config.web_workers;
     let shared = Arc::new(SharedCollector {
         state: Mutex::new(CollectorState {
             history: HistoryStore::new(config.history_size),
@@ -21,24 +21,18 @@ fn main() {
         config,
     });
 
-    let collector = Arc::clone(&shared);
-    let collector_thread = thread::Builder::new()
-        .name("collector-query".to_string())
-        .spawn(move || scraper::poll_loop(collector))
-        .expect("failed to spawn collector query thread");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("failed to build tokio runtime");
 
-    let server = Arc::clone(&shared);
-    let server_thread = thread::Builder::new()
-        .name("collector-web".to_string())
-        .spawn(move || server::run_server(server))
-        .expect("failed to spawn collector web thread");
-
-    if let Err(error) = server_thread.join() {
-        eprintln!("web server thread failed: {error:?}");
-    }
-    if let Err(error) = collector_thread.join() {
-        eprintln!("collector query thread failed: {error:?}");
-    }
+    runtime.block_on(async move {
+        let collector = Arc::clone(&shared);
+        tokio::spawn(async move { scraper::poll_loop(collector).await });
+        server::run_server(shared).await;
+    });
 }
 
 fn install_process_panic_handler() {

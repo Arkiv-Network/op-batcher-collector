@@ -1,14 +1,13 @@
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, lookup_host};
+use tokio::time::{sleep, timeout};
 
 use crate::model::{
-    epoch_second_now, error_info_to_json, json_string, object_json, record_locked, second_key,
-    ErrorInfo, SharedCollector,
+    ErrorInfo, SharedCollector, epoch_second_now, record_locked, second_key,
 };
 
 const RPC_TIMEOUT_MS: u64 = 900;
@@ -21,24 +20,19 @@ struct HttpUrl {
     path: String,
 }
 
-pub fn poll_loop(shared: Arc<SharedCollector>) {
+pub async fn poll_loop(shared: Arc<SharedCollector>) {
     loop {
-        if let Err(error) = collect_due_seconds(&shared) {
+        if let Err(error) = collect_due_seconds(&shared).await {
             eprintln!(
                 "collector tick failed {}",
-                error_info_to_json(&ErrorInfo {
-                    message: error,
-                    code_json: None,
-                    status: None,
-                    body_json: None,
-                })
+                json!({ "message": error })
             );
         }
-        thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+        sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
 }
 
-fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
+async fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
     let current_second = epoch_second_now();
     {
         let mut state = shared
@@ -72,9 +66,9 @@ fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
                 None,
                 Some(ErrorInfo {
                     message: "Collector fell behind before this second could be polled".to_string(),
-                    code_json: Some(json_string("COLLECTOR_BEHIND")),
+                    code: Some(Value::String("COLLECTOR_BEHIND".to_string())),
                     status: None,
-                    body_json: None,
+                    body: None,
                 }),
                 0,
             );
@@ -83,7 +77,7 @@ fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
 
     let started = Instant::now();
     let second_key = second_key(current_second);
-    let rpc_result = call_throttle_controller(&shared.config.rpc_url, &second_key);
+    let rpc_result = call_throttle_controller(&shared.config.rpc_url, &second_key).await;
     let duration_ms = started.elapsed().as_millis();
 
     let mut state = shared
@@ -91,23 +85,23 @@ fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
         .lock()
         .map_err(|_| "collector state lock was poisoned".to_string())?;
     match rpc_result {
-        Ok(result_json) => {
+        Ok(result) => {
             record_locked(
                 &shared.config.rpc_url,
                 &mut state,
                 current_second,
                 true,
-                Some(result_json),
+                Some(result),
                 None,
                 duration_ms,
             );
             println!(
                 "batcher response ok {}",
-                object_json(&[
-                    ("second", json_string(&second_key)),
-                    ("durationMs", duration_ms.to_string()),
-                    ("rpcUrl", json_string(&shared.config.rpc_url)),
-                ])
+                json!({
+                    "second": second_key,
+                    "durationMs": duration_ms.to_string(),
+                    "rpcUrl": shared.config.rpc_url,
+                })
             );
         }
         Err(error) => {
@@ -127,47 +121,36 @@ fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
     Ok(())
 }
 
-fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<String, ErrorInfo> {
+async fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<Value, ErrorInfo> {
     let url = parse_http_url(rpc_url)?;
-    let mut stream = connect_http(&url)?;
-    let body = format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"admin_getThrottleController\",\"params\":[]}}",
-        json_string(id)
-    );
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "admin_getThrottleController",
+        "params": [],
+    })
+    .to_string();
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         url.path,
         url.host,
-        body.len(),
-        body
+        request_body.len(),
+        request_body
     );
 
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|error| ErrorInfo {
-            message: format!("RPC HTTP request failed: {error}"),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: None,
-            body_json: None,
-        })?;
+    let rpc_timeout = Duration::from_millis(RPC_TIMEOUT_MS);
+    let raw_response = timeout(rpc_timeout, exchange(&url, request.as_bytes()))
+        .await
+        .map_err(|_| http_error(format!("RPC timed out after {RPC_TIMEOUT_MS}ms"), None, None))??;
 
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .map_err(|error| ErrorInfo {
-            message: format!("RPC HTTP response read failed: {error}"),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: None,
-            body_json: None,
-        })?;
-
-    let response = String::from_utf8_lossy(&response);
-    let (head, mut body) = response.split_once("\r\n\r\n").ok_or_else(|| ErrorInfo {
-        message: "RPC HTTP response was malformed".to_string(),
-        code_json: Some(json_string("RPC_HTTP_ERROR")),
-        status: None,
-        body_json: Some(json_string(response.as_ref())),
-    })?;
+    let response = String::from_utf8_lossy(&raw_response);
+    let (head, mut body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| http_error(
+            "RPC HTTP response was malformed".to_string(),
+            None,
+            Some(Value::String(response.to_string())),
+        ))?;
     let status = parse_http_status(head).unwrap_or(0);
     let decoded_chunked;
     if header_value(head, "transfer-encoding")
@@ -181,12 +164,11 @@ fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<String, ErrorInfo
     let parsed: Option<Value> = serde_json::from_str(body).ok();
 
     if !(200..300).contains(&status) {
-        return Err(ErrorInfo {
-            message: format!("RPC HTTP request failed with {status}"),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: Some(status),
-            body_json: Some(body_to_json(parsed.as_ref(), body)),
-        });
+        return Err(http_error(
+            format!("RPC HTTP request failed with {status}"),
+            Some(status),
+            Some(body_as_value(parsed.as_ref(), body)),
+        ));
     }
 
     if let Some(value) = &parsed {
@@ -199,45 +181,86 @@ fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<String, ErrorInfo
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| "RPC returned an error".to_string());
-            let code_json = error_value
+            let code = error_value
                 .get("code")
-                .map(value_to_json)
-                .or_else(|| Some(json_string("RPC_ERROR")));
-            let data_json = error_value.get("data").map(value_to_json);
+                .cloned()
+                .or_else(|| Some(Value::String("RPC_ERROR".to_string())));
+            let data = error_value.get("data").cloned();
 
             return Err(ErrorInfo {
                 message,
-                code_json,
+                code,
                 status: None,
-                body_json: data_json,
+                body: data,
             });
         }
 
         if let Some(result_value) = value.get("result") {
-            return Ok(value_to_json(result_value));
+            return Ok(result_value.clone());
         }
     }
 
-    Ok(body_to_json(parsed.as_ref(), body))
+    Ok(body_as_value(parsed.as_ref(), body))
 }
 
-fn value_to_json(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+async fn exchange(url: &HttpUrl, request: &[u8]) -> Result<Vec<u8>, ErrorInfo> {
+    let addr = lookup_host((url.host.as_str(), url.port))
+        .await
+        .map_err(|error| http_error(format!("RPC host resolution failed: {error}"), None, None))?
+        .next()
+        .ok_or_else(|| {
+            http_error(
+                "RPC host resolution returned no addresses".to_string(),
+                None,
+                None,
+            )
+        })?;
+
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .map_err(|error| http_error(format!("RPC connection failed: {error}"), None, None))?;
+
+    stream
+        .write_all(request)
+        .await
+        .map_err(|error| http_error(format!("RPC HTTP request failed: {error}"), None, None))?;
+
+    let mut buffer = Vec::new();
+    stream
+        .read_to_end(&mut buffer)
+        .await
+        .map_err(|error| {
+            http_error(
+                format!("RPC HTTP response read failed: {error}"),
+                None,
+                None,
+            )
+        })?;
+
+    Ok(buffer)
 }
 
-fn body_to_json(parsed: Option<&Value>, raw: &str) -> String {
+fn http_error(message: String, status: Option<u16>, body: Option<Value>) -> ErrorInfo {
+    ErrorInfo {
+        message,
+        code: Some(Value::String("RPC_HTTP_ERROR".to_string())),
+        status,
+        body,
+    }
+}
+
+fn body_as_value(parsed: Option<&Value>, raw: &str) -> Value {
     parsed
-        .map(value_to_json)
-        .unwrap_or_else(|| json_string(raw))
+        .cloned()
+        .unwrap_or_else(|| Value::String(raw.to_string()))
 }
 
 fn parse_http_url(raw: &str) -> Result<HttpUrl, ErrorInfo> {
     let without_scheme = raw.strip_prefix("http://").ok_or_else(|| ErrorInfo {
-        message: "Only plain http:// RPC URLs are supported by the standard-library client"
-            .to_string(),
-        code_json: Some(json_string("RPC_UNSUPPORTED_URL")),
+        message: "Only plain http:// RPC URLs are supported by the collector".to_string(),
+        code: Some(Value::String("RPC_UNSUPPORTED_URL".to_string())),
         status: None,
-        body_json: None,
+        body: None,
     })?;
     let (authority, path) = without_scheme
         .split_once('/')
@@ -251,42 +274,13 @@ fn parse_http_url(raw: &str) -> Result<HttpUrl, ErrorInfo> {
     if host.is_empty() {
         return Err(ErrorInfo {
             message: "RPC URL host is empty".to_string(),
-            code_json: Some(json_string("RPC_INVALID_URL")),
+            code: Some(Value::String("RPC_INVALID_URL".to_string())),
             status: None,
-            body_json: None,
+            body: None,
         });
     }
 
     Ok(HttpUrl { host, port, path })
-}
-
-fn connect_http(url: &HttpUrl) -> Result<TcpStream, ErrorInfo> {
-    let address = (url.host.as_str(), url.port)
-        .to_socket_addrs()
-        .map_err(|error| ErrorInfo {
-            message: format!("RPC host resolution failed: {error}"),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: None,
-            body_json: None,
-        })?
-        .next()
-        .ok_or_else(|| ErrorInfo {
-            message: "RPC host resolution returned no addresses".to_string(),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: None,
-            body_json: None,
-        })?;
-    let stream = TcpStream::connect_timeout(&address, Duration::from_millis(RPC_TIMEOUT_MS))
-        .map_err(|error| ErrorInfo {
-            message: format!("RPC connection failed: {error}"),
-            code_json: Some(json_string("RPC_HTTP_ERROR")),
-            status: None,
-            body_json: None,
-        })?;
-    let timeout = Some(Duration::from_millis(RPC_TIMEOUT_MS));
-    let _ = stream.set_read_timeout(timeout);
-    let _ = stream.set_write_timeout(timeout);
-    Ok(stream)
 }
 
 fn parse_http_status(head: &str) -> Option<u16> {

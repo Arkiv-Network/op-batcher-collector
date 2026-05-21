@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::env;
-use std::fmt::Write as FmtWrite;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{Value, json};
 
 pub const DEFAULT_RPC_URL: &str = "http://host.docker.internal:8548";
 pub const DEFAULT_HISTORY_SIZE: usize = 5000;
@@ -22,9 +23,9 @@ pub struct Config {
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
     pub message: String,
-    pub code_json: Option<String>,
+    pub code: Option<Value>,
     pub status: Option<u16>,
-    pub body_json: Option<String>,
+    pub body: Option<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +35,7 @@ pub struct HistoryEntry {
     pub rpc_url: String,
     pub duration_ms: u128,
     pub ok: bool,
-    pub result_json: Option<String>,
+    pub result: Option<Value>,
     pub error: Option<ErrorInfo>,
 }
 
@@ -94,6 +95,51 @@ impl HistoryStore {
     }
 }
 
+impl ErrorInfo {
+    pub fn to_value(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert("message".to_string(), Value::String(self.message.clone()));
+        if let Some(code) = &self.code {
+            map.insert("code".to_string(), code.clone());
+        }
+        if let Some(status) = self.status {
+            map.insert("status".to_string(), Value::from(status));
+        }
+        if let Some(body) = &self.body {
+            map.insert("body".to_string(), body.clone());
+        }
+        Value::Object(map)
+    }
+}
+
+impl HistoryEntry {
+    pub fn to_value(&self) -> Value {
+        let mut value = json!({
+            "second": self.second,
+            "collectedAt": self.collected_at,
+            "rpcUrl": self.rpc_url,
+            "durationMs": self.duration_ms.to_string(),
+            "ok": self.ok,
+        });
+        let map = value.as_object_mut().expect("history entry serializes as object");
+        if self.ok {
+            map.insert(
+                "result".to_string(),
+                self.result.clone().unwrap_or(Value::Null),
+            );
+        } else {
+            map.insert(
+                "error".to_string(),
+                self.error
+                    .as_ref()
+                    .map(ErrorInfo::to_value)
+                    .unwrap_or_else(|| json!({ "message": "Unknown error" })),
+            );
+        }
+        value
+    }
+}
+
 pub fn create_config() -> Config {
     let rpc_url = env::var("BATCHER_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
     let history_size = parse_positive_usize(
@@ -139,7 +185,7 @@ pub fn record_locked(
     state: &mut CollectorState,
     epoch_second: i64,
     ok: bool,
-    result_json: Option<String>,
+    result: Option<Value>,
     error: Option<ErrorInfo>,
     duration_ms: u128,
 ) {
@@ -150,7 +196,7 @@ pub fn record_locked(
         rpc_url: rpc_url.to_string(),
         duration_ms,
         ok,
-        result_json,
+        result,
         error,
     });
     state.latest_epoch_second = Some(epoch_second);
@@ -301,64 +347,6 @@ fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-pub fn object_json(fields: &[(&str, String)]) -> String {
-    let mut json = String::from("{");
-    for (index, (key, value)) in fields.iter().enumerate() {
-        if index > 0 {
-            json.push(',');
-        }
-        json.push_str(&json_string(key));
-        json.push(':');
-        json.push_str(value);
-    }
-    json.push('}');
-    json
-}
-
-pub fn option_json_string(value: Option<&str>) -> String {
-    value.map(json_string).unwrap_or_else(|| "null".to_string())
-}
-
-pub fn json_string(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len() + 2);
-    encoded.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => encoded.push_str("\\\""),
-            '\\' => encoded.push_str("\\\\"),
-            '\n' => encoded.push_str("\\n"),
-            '\r' => encoded.push_str("\\r"),
-            '\t' => encoded.push_str("\\t"),
-            '\u{08}' => encoded.push_str("\\b"),
-            '\u{0c}' => encoded.push_str("\\f"),
-            character if character < ' ' => {
-                let _ = write!(encoded, "\\u{:04x}", character as u32);
-            }
-            character => encoded.push(character),
-        }
-    }
-    encoded.push('"');
-    encoded
-}
-
-pub fn error_info_to_json(error: &ErrorInfo) -> String {
-    let mut fields = vec![("message", json_string(&error.message))];
-    if let Some(code_json) = &error.code_json {
-        fields.push(("code", code_json.clone()));
-    }
-    if let Some(status) = error.status {
-        fields.push(("status", status.to_string()));
-    }
-    if let Some(body_json) = &error.body_json {
-        fields.push(("body", body_json.clone()));
-    }
-    object_json(&fields)
-}
-
-pub fn error_payload(message: &str) -> String {
-    object_json(&[("message", json_string(message))])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +394,7 @@ mod tests {
                 rpc_url: "http://rpc.example".to_string(),
                 duration_ms: 0,
                 ok: true,
-                result_json: Some("{}".to_string()),
+                result: Some(json!({})),
                 error: None,
             });
         }
@@ -415,5 +403,4 @@ mod tests {
         assert_eq!(history.oldest_key(), Some(second_key(2).as_str()));
         assert_eq!(history.latest_key(), Some(second_key(3).as_str()));
     }
-
 }
