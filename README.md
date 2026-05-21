@@ -40,6 +40,19 @@ with matching declaration files.
 
 ## Run with Docker
 
+Pull the published image from GitHub Container Registry:
+
+```sh
+docker pull ghcr.io/arkiv-network/op-batcher-collector:latest
+docker run --rm -p 28881:28881 \
+  -e BATCHER_RPC_URL=http://host.docker.internal:8548 \
+  -e HISTORY_SIZE=5000 \
+  -e COLLECTOR_LISTEN_PORT=28881 \
+  ghcr.io/arkiv-network/op-batcher-collector:latest
+```
+
+Build the image locally for development:
+
 ```sh
 docker build -t op-batcher-collector .
 docker run --rm -p 28881:28881 \
