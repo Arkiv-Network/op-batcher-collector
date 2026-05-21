@@ -1,5 +1,6 @@
 const DEFAULT_RPC_URL = "http://host.docker.internal:8548";
 const DEFAULT_HISTORY_SIZE = 5000;
+const DEFAULT_LISTEN_HOST = "0.0.0.0";
 const DEFAULT_LISTEN_PORT = 28881;
 const RPC_TIMEOUT_MS = 900;
 const POLL_INTERVAL_MS = 250;
@@ -9,6 +10,7 @@ type Env = Record<string, string | undefined>;
 export interface CollectorConfig {
   rpcUrl: string;
   historySize: number;
+  listenHost: string;
   listenPort: number;
 }
 
@@ -78,7 +80,7 @@ interface BunServer {
 }
 
 interface BunRuntime {
-  serve(options: { port: number; fetch: HttpHandler }): BunServer;
+  serve(options: { hostname: string; port: number; fetch: HttpHandler }): BunServer;
 }
 
 declare const Bun: BunRuntime | undefined;
@@ -96,6 +98,7 @@ export function createConfig(env: Env = process.env): CollectorConfig {
   return {
     rpcUrl: env.BATCHER_RPC_URL || DEFAULT_RPC_URL,
     historySize: parsePositiveInteger(env.HISTORY_SIZE, DEFAULT_HISTORY_SIZE),
+    listenHost: env.COLLECTOR_LISTEN_HOST || DEFAULT_LISTEN_HOST,
     listenPort: parsePositiveInteger(
       env.COLLECTOR_LISTEN_PORT,
       DEFAULT_LISTEN_PORT,
@@ -594,6 +597,7 @@ export async function main(): Promise<void> {
   while (true) {
     try {
       const server = bun.serve({
+        hostname: config.listenHost,
         port: config.listenPort,
         fetch: createHttpHandler(collector),
       });
@@ -604,6 +608,8 @@ export async function main(): Promise<void> {
           url: server.url.toString(),
           rpcUrl: config.rpcUrl,
           historySize: config.historySize,
+          listenHost: config.listenHost,
+          listenPort: config.listenPort,
         }),
       );
       return;

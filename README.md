@@ -25,6 +25,7 @@ entries instead of crashing the process.
 | --- | --- | --- |
 | `BATCHER_RPC_URL` | `http://host.docker.internal:8548` | JSON-RPC endpoint to poll. |
 | `HISTORY_SIZE` | `5000` | Number of datetime-second entries to retain. |
+| `COLLECTOR_LISTEN_HOST` | `0.0.0.0` | HTTP API listen host. |
 | `COLLECTOR_LISTEN_PORT` | `28881` | HTTP API listen port. |
 
 ## Build and run locally
@@ -47,6 +48,7 @@ docker pull ghcr.io/arkiv-network/op-batcher-collector:latest
 docker run --rm -p 28881:28881 \
   -e BATCHER_RPC_URL=http://host.docker.internal:8548 \
   -e HISTORY_SIZE=5000 \
+  -e COLLECTOR_LISTEN_HOST=0.0.0.0 \
   -e COLLECTOR_LISTEN_PORT=28881 \
   ghcr.io/arkiv-network/op-batcher-collector:latest
 ```
@@ -58,6 +60,7 @@ docker build -t op-batcher-collector .
 docker run --rm -p 28881:28881 \
   -e BATCHER_RPC_URL=http://host.docker.internal:8548 \
   -e HISTORY_SIZE=5000 \
+  -e COLLECTOR_LISTEN_HOST=0.0.0.0 \
   -e COLLECTOR_LISTEN_PORT=28881 \
   op-batcher-collector
 ```
