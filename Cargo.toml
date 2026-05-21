@@ -1,10 +1,13 @@
 [package]
 name = "op-batcher-collector"
 version = "1.0.0"
-edition = "2021"
-description = "Rust standard-library collector for the admin_getThrottleController JSON-RPC method."
+edition = "2024"
+description = "Rust collector for the admin_getThrottleController JSON-RPC method."
 repository = "https://github.com/Arkiv-Network/op-batcher-collector"
 publish = false
+
+[dependencies]
+serde_json = "1"
 
 [profile.release]
 strip = true

@@ -8,6 +8,7 @@ pub const DEFAULT_RPC_URL: &str = "http://host.docker.internal:8548";
 pub const DEFAULT_HISTORY_SIZE: usize = 5000;
 pub const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
 pub const DEFAULT_LISTEN_PORT: u16 = 28881;
+pub const DEFAULT_WEB_WORKERS: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -15,6 +16,7 @@ pub struct Config {
     pub history_size: usize,
     pub listen_host: String,
     pub listen_port: u16,
+    pub web_workers: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -104,12 +106,17 @@ pub fn create_config() -> Config {
         env::var("COLLECTOR_LISTEN_PORT").ok().as_deref(),
         DEFAULT_LISTEN_PORT,
     );
+    let web_workers = parse_positive_usize(
+        env::var("COLLECTOR_WEB_WORKERS").ok().as_deref(),
+        DEFAULT_WEB_WORKERS,
+    );
 
     Config {
         rpc_url,
         history_size,
         listen_host,
         listen_port,
+        web_workers,
     }
 }
 
@@ -334,18 +341,6 @@ pub fn json_string(value: &str) -> String {
     encoded
 }
 
-pub fn json_value_or_string(value: &str) -> String {
-    let trimmed = value.trim();
-    if parse_json_value_end(trimmed.as_bytes(), 0)
-        .map(|end| trimmed[end..].trim().is_empty())
-        .unwrap_or(false)
-    {
-        trimmed.to_string()
-    } else {
-        json_string(value)
-    }
-}
-
 pub fn error_info_to_json(error: &ErrorInfo) -> String {
     let mut fields = vec![("message", json_string(&error.message))];
     if let Some(code_json) = &error.code_json {
@@ -362,168 +357,6 @@ pub fn error_info_to_json(error: &ErrorInfo) -> String {
 
 pub fn error_payload(message: &str) -> String {
     object_json(&[("message", json_string(message))])
-}
-
-pub fn find_json_key_value<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-    let bytes = json.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        index = skip_ws(bytes, index);
-        if bytes.get(index) == Some(&b'"') {
-            let key_end = parse_string_end(bytes, index)?;
-            let raw_key = &json[index + 1..key_end - 1];
-            let after_key = skip_ws(bytes, key_end);
-            if raw_key == key && bytes.get(after_key) == Some(&b':') {
-                let value_start = skip_ws(bytes, after_key + 1);
-                let value_end = parse_json_value_end(bytes, value_start)?;
-                return json.get(value_start..value_end);
-            }
-            index = key_end;
-        } else {
-            index += 1;
-        }
-    }
-    None
-}
-
-pub fn parse_json_value_end(bytes: &[u8], start: usize) -> Option<usize> {
-    match bytes.get(start)? {
-        b'"' => parse_string_end(bytes, start),
-        b'{' => parse_balanced_end(bytes, start, b'{', b'}'),
-        b'[' => parse_balanced_end(bytes, start, b'[', b']'),
-        b'-' | b'0'..=b'9' => parse_number_end(bytes, start),
-        b't' if bytes.get(start..start + 4) == Some(b"true") => Some(start + 4),
-        b'f' if bytes.get(start..start + 5) == Some(b"false") => Some(start + 5),
-        b'n' if bytes.get(start..start + 4) == Some(b"null") => Some(start + 4),
-        _ => None,
-    }
-}
-
-fn parse_string_end(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start) != Some(&b'"') {
-        return None;
-    }
-    let mut index = start + 1;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index += 2,
-            b'"' => return Some(index + 1),
-            _ => index += 1,
-        }
-    }
-    None
-}
-
-fn parse_balanced_end(bytes: &[u8], start: usize, open: u8, close: u8) -> Option<usize> {
-    if bytes.get(start) != Some(&open) {
-        return None;
-    }
-    let mut depth = 0;
-    let mut index = start;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'"' => index = parse_string_end(bytes, index)?,
-            byte if byte == open => {
-                depth += 1;
-                index += 1;
-            }
-            byte if byte == close => {
-                depth -= 1;
-                index += 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => index += 1,
-        }
-    }
-    None
-}
-
-fn parse_number_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut index = start;
-    if bytes.get(index) == Some(&b'-') {
-        index += 1;
-    }
-    while bytes
-        .get(index)
-        .map(|byte| byte.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        index += 1;
-    }
-    if bytes.get(index) == Some(&b'.') {
-        index += 1;
-        while bytes
-            .get(index)
-            .map(|byte| byte.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            index += 1;
-        }
-    }
-    if matches!(bytes.get(index), Some(b'e') | Some(b'E')) {
-        index += 1;
-        if matches!(bytes.get(index), Some(b'+') | Some(b'-')) {
-            index += 1;
-        }
-        while bytes
-            .get(index)
-            .map(|byte| byte.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            index += 1;
-        }
-    }
-    (index > start).then_some(index)
-}
-
-fn skip_ws(bytes: &[u8], mut index: usize) -> usize {
-    while bytes
-        .get(index)
-        .map(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(false)
-    {
-        index += 1;
-    }
-    index
-}
-
-pub fn json_string_value(json: &str) -> Option<String> {
-    let trimmed = json.trim();
-    let bytes = trimmed.as_bytes();
-    if bytes.first() != Some(&b'"') || bytes.last() != Some(&b'"') {
-        return None;
-    }
-    let mut decoded = String::new();
-    let mut index = 1;
-    while index + 1 < bytes.len() {
-        match bytes[index] {
-            b'\\' => {
-                index += 1;
-                match bytes.get(index)? {
-                    b'"' => decoded.push('"'),
-                    b'\\' => decoded.push('\\'),
-                    b'/' => decoded.push('/'),
-                    b'b' => decoded.push('\u{08}'),
-                    b'f' => decoded.push('\u{0c}'),
-                    b'n' => decoded.push('\n'),
-                    b'r' => decoded.push('\r'),
-                    b't' => decoded.push('\t'),
-                    b'u' => {
-                        let hex = std::str::from_utf8(bytes.get(index + 1..index + 5)?).ok()?;
-                        let codepoint = u16::from_str_radix(hex, 16).ok()? as u32;
-                        decoded.push(char::from_u32(codepoint)?);
-                        index += 4;
-                    }
-                    _ => return None,
-                }
-            }
-            byte => decoded.push(byte as char),
-        }
-        index += 1;
-    }
-    Some(decoded)
 }
 
 #[cfg(test)]
@@ -583,19 +416,4 @@ mod tests {
         assert_eq!(history.latest_key(), Some(second_key(3).as_str()));
     }
 
-    #[test]
-    fn json_key_scanner_extracts_nested_values() {
-        let payload = r#"{"jsonrpc":"2.0","result":{"nested":["value",{"ok":true}]}}"#;
-        assert_eq!(
-            find_json_key_value(payload, "result"),
-            Some(r#"{"nested":["value",{"ok":true}]}"#)
-        );
-
-        let error = r#"{"error":{"code":-1,"message":"denied"}}"#;
-        let error_value = find_json_key_value(error, "error").unwrap();
-        assert_eq!(
-            find_json_key_value(error_value, "message").and_then(json_string_value),
-            Some("denied".to_string())
-        );
-    }
 }

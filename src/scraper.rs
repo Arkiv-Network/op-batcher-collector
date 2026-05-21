@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use crate::model::{
-    epoch_second_now, error_info_to_json, find_json_key_value, json_string, json_string_value,
-    json_value_or_string, object_json, record_locked, second_key, ErrorInfo, SharedCollector,
+    epoch_second_now, error_info_to_json, json_string, object_json, record_locked, second_key,
+    ErrorInfo, SharedCollector,
 };
 
 const RPC_TIMEOUT_MS: u64 = 900;
@@ -176,27 +178,32 @@ fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<String, ErrorInfo
         body = &decoded_chunked;
     }
 
+    let parsed: Option<Value> = serde_json::from_str(body).ok();
+
     if !(200..300).contains(&status) {
         return Err(ErrorInfo {
             message: format!("RPC HTTP request failed with {status}"),
             code_json: Some(json_string("RPC_HTTP_ERROR")),
             status: Some(status),
-            body_json: Some(json_value_or_string(body)),
+            body_json: Some(body_to_json(parsed.as_ref(), body)),
         });
     }
 
-    if let Some(error_json) = find_json_key_value(body, "error") {
-        if error_json.trim() != "null" && error_json.trim() != "false" {
-            let message = find_json_key_value(error_json, "message")
-                .and_then(json_string_value)
+    if let Some(value) = &parsed {
+        if let Some(error_value) = value.get("error")
+            && !error_value.is_null()
+            && error_value.as_bool() != Some(false)
+        {
+            let message = error_value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
                 .unwrap_or_else(|| "RPC returned an error".to_string());
-            let code_json = find_json_key_value(error_json, "code")
-                .map(str::trim)
-                .map(ToOwned::to_owned)
+            let code_json = error_value
+                .get("code")
+                .map(value_to_json)
                 .or_else(|| Some(json_string("RPC_ERROR")));
-            let data_json = find_json_key_value(error_json, "data")
-                .map(str::trim)
-                .map(ToOwned::to_owned);
+            let data_json = error_value.get("data").map(value_to_json);
 
             return Err(ErrorInfo {
                 message,
@@ -205,13 +212,23 @@ fn call_throttle_controller(rpc_url: &str, id: &str) -> Result<String, ErrorInfo
                 body_json: data_json,
             });
         }
+
+        if let Some(result_value) = value.get("result") {
+            return Ok(value_to_json(result_value));
+        }
     }
 
-    if let Some(result_json) = find_json_key_value(body, "result") {
-        Ok(result_json.trim().to_string())
-    } else {
-        Ok(json_value_or_string(body))
-    }
+    Ok(body_to_json(parsed.as_ref(), body))
+}
+
+fn value_to_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+fn body_to_json(parsed: Option<&Value>, raw: &str) -> String {
+    parsed
+        .map(value_to_json)
+        .unwrap_or_else(|| json_string(raw))
 }
 
 fn parse_http_url(raw: &str) -> Result<HttpUrl, ErrorInfo> {

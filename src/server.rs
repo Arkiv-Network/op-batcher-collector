@@ -10,8 +10,6 @@ use crate::model::{
     object_json, option_json_string, second_key, HistoryEntry, SharedCollector,
 };
 
-const WEB_SERVER_WORKERS: usize = 4;
-
 pub fn run_server(shared: Arc<SharedCollector>) {
     let bind_address = format!(
         "{}:{}",
@@ -34,12 +32,13 @@ pub fn run_server(shared: Arc<SharedCollector>) {
             ("historySize", shared.config.history_size.to_string()),
             ("listenHost", json_string(&shared.config.listen_host)),
             ("listenPort", shared.config.listen_port.to_string()),
+            ("webWorkers", shared.config.web_workers.to_string()),
         ])
     );
 
     let (sender, receiver) = mpsc::channel::<TcpStream>();
     let receiver = Arc::new(Mutex::new(receiver));
-    for worker_id in 0..WEB_SERVER_WORKERS {
+    for worker_id in 0..shared.config.web_workers {
         let worker_receiver = Arc::clone(&receiver);
         let worker_shared = Arc::clone(&shared);
         thread::Builder::new()
@@ -390,6 +389,7 @@ mod tests {
                 history_size: 10,
                 listen_host: "127.0.0.1".to_string(),
                 listen_port: 28881,
+                web_workers: 4,
             },
             state: Mutex::new(CollectorState {
                 history: HistoryStore::new(10),
