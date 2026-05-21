@@ -11,7 +11,7 @@ import {
   normalizeSecond,
   parsePositiveInteger,
   secondKey,
-} from "../src/collector.js";
+} from "../dist/collector.js";
 
 async function withJsonServer(handler) {
   const server = createServer(handler);

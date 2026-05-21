@@ -4,12 +4,95 @@ const DEFAULT_LISTEN_PORT = 28881;
 const RPC_TIMEOUT_MS = 900;
 const POLL_INTERVAL_MS = 250;
 
-export function parsePositiveInteger(value, fallback) {
+type Env = Record<string, string | undefined>;
+
+export interface CollectorConfig {
+  rpcUrl: string;
+  historySize: number;
+  listenPort: number;
+}
+
+export interface SerializedError {
+  message: string;
+  name?: string;
+  code?: unknown;
+  status?: unknown;
+  data?: unknown;
+  body?: unknown;
+  cause?: SerializedError;
+}
+
+interface HistoryEntryBase {
+  second: string;
+  collectedAt: string;
+  rpcUrl: string;
+  durationMs: number;
+}
+
+export interface SuccessfulHistoryEntry extends HistoryEntryBase {
+  ok: true;
+  result: unknown;
+}
+
+export interface FailedHistoryEntry extends HistoryEntryBase {
+  ok: false;
+  error: SerializedError;
+}
+
+export type HistoryEntry = SuccessfulHistoryEntry | FailedHistoryEntry;
+type NewHistoryEntry =
+  | Pick<SuccessfulHistoryEntry, "durationMs" | "ok" | "result">
+  | Pick<FailedHistoryEntry, "durationMs" | "error" | "ok">;
+
+export interface RpcCallRequest {
+  rpcUrl: string;
+  id: string;
+  second?: number;
+  secondKey?: string;
+  timeoutMs?: number;
+}
+
+export type RpcCall = (request: RpcCallRequest) => Promise<unknown>;
+
+export interface CollectorLogger {
+  error: (...args: unknown[]) => void;
+}
+
+export interface CollectorStatus {
+  ok: true;
+  rpcUrl: string;
+  historySize: number;
+  retainedEntries: number;
+  oldestSecond: string | null;
+  latestSecond: string | null;
+  currentSecond: string;
+  behindSeconds: number;
+  collecting: boolean;
+  startedAt: string;
+}
+
+export type HttpHandler = (request: Request) => Response | Promise<Response>;
+
+interface BunServer {
+  url: URL;
+}
+
+interface BunRuntime {
+  serve(options: { port: number; fetch: HttpHandler }): BunServer;
+}
+
+declare const Bun: BunRuntime | undefined;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function parsePositiveInteger(value: unknown, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function createConfig(env = process.env) {
+export function createConfig(env: Env = process.env): CollectorConfig {
   return {
     rpcUrl: env.BATCHER_RPC_URL || DEFAULT_RPC_URL,
     historySize: parsePositiveInteger(env.HISTORY_SIZE, DEFAULT_HISTORY_SIZE),
@@ -20,15 +103,15 @@ export function createConfig(env = process.env) {
   };
 }
 
-export function epochSecondNow() {
+export function epochSecondNow(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-export function secondKey(epochSecond) {
+export function secondKey(epochSecond: number): string {
   return new Date(epochSecond * 1000).toISOString().replace(".000Z", "Z");
 }
 
-export function normalizeSecond(value) {
+export function normalizeSecond(value: unknown): string | null {
   if (value === undefined || value === null || value === "") {
     return null;
   }
@@ -46,51 +129,55 @@ export function normalizeSecond(value) {
   return secondKey(Math.floor(parsed / 1000));
 }
 
-export function serializeError(error) {
+export function serializeError(error: unknown): SerializedError {
   if (!error || typeof error !== "object") {
     return {
       message: String(error),
     };
   }
 
-  const serialized = {
-    message: String(error.message || error),
+  const maybeError = error as Record<string, unknown>;
+  const serialized: SerializedError = {
+    message: String(maybeError.message || error),
   };
 
-  if (error.name) {
-    serialized.name = String(error.name);
+  if (maybeError.name) {
+    serialized.name = String(maybeError.name);
   }
 
-  if (error.code !== undefined) {
-    serialized.code = error.code;
+  if (maybeError.code !== undefined) {
+    serialized.code = maybeError.code;
   }
 
-  if (error.status !== undefined) {
-    serialized.status = error.status;
+  if (maybeError.status !== undefined) {
+    serialized.status = maybeError.status;
   }
 
-  if (error.data !== undefined) {
-    serialized.data = error.data;
+  if (maybeError.data !== undefined) {
+    serialized.data = maybeError.data;
   }
 
-  if (error.body !== undefined) {
-    serialized.body = error.body;
+  if (maybeError.body !== undefined) {
+    serialized.body = maybeError.body;
   }
 
-  if (error.cause !== undefined) {
-    serialized.cause = serializeError(error.cause);
+  if (maybeError.cause !== undefined) {
+    serialized.cause = serializeError(maybeError.cause);
   }
 
   return serialized;
 }
 
-export class HistoryStore {
-  constructor(limit) {
+export class HistoryStore<TEntry = HistoryEntry> {
+  readonly limit: number;
+  readonly entries: Map<string, TEntry>;
+
+  constructor(limit: unknown) {
     this.limit = Math.max(1, parsePositiveInteger(limit, DEFAULT_HISTORY_SIZE));
     this.entries = new Map();
   }
 
-  set(key, entry) {
+  set(key: string, entry: TEntry): void {
     if (this.entries.has(key)) {
       this.entries.delete(key);
     }
@@ -99,39 +186,46 @@ export class HistoryStore {
     this.trim();
   }
 
-  get(key) {
+  get(key: string): TEntry | undefined {
     return this.entries.get(key);
   }
 
-  list() {
+  list(): TEntry[] {
     return Array.from(this.entries.values());
   }
 
-  object() {
+  object(): Record<string, TEntry> {
     return Object.fromEntries(this.entries);
   }
 
-  oldestKey() {
+  oldestKey(): string | null {
     return this.entries.keys().next().value ?? null;
   }
 
-  latestKey() {
-    let latest = null;
+  latestKey(): string | null {
+    let latest: string | null = null;
     for (const key of this.entries.keys()) {
       latest = key;
     }
     return latest;
   }
 
-  trim() {
+  trim(): void {
     while (this.entries.size > this.limit) {
       const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) {
+        return;
+      }
       this.entries.delete(oldest);
     }
   }
 }
 
-export async function callThrottleController({ rpcUrl, id, timeoutMs = RPC_TIMEOUT_MS }) {
+export async function callThrottleController({
+  rpcUrl,
+  id,
+  timeoutMs = RPC_TIMEOUT_MS,
+}: RpcCallRequest): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -151,12 +245,15 @@ export async function callThrottleController({ rpcUrl, id, timeoutMs = RPC_TIMEO
     });
 
     const text = await response.text();
-    let payload = null;
+    let payload: unknown = null;
     if (text) {
       try {
         payload = JSON.parse(text);
       } catch (error) {
-        const parseError = new Error("RPC response was not valid JSON");
+        const parseError = new Error("RPC response was not valid JSON") as Error & {
+          body?: string;
+          cause?: unknown;
+        };
         parseError.cause = error;
         parseError.body = text.slice(0, 1000);
         throw parseError;
@@ -164,34 +261,64 @@ export async function callThrottleController({ rpcUrl, id, timeoutMs = RPC_TIMEO
     }
 
     if (!response.ok) {
-      const httpError = new Error(`RPC HTTP request failed with ${response.status}`);
+      const httpError = new Error(`RPC HTTP request failed with ${response.status}`) as Error & {
+        body?: unknown;
+        code?: string;
+        status?: number;
+      };
       httpError.code = "RPC_HTTP_ERROR";
       httpError.status = response.status;
       httpError.body = payload ?? text;
       throw httpError;
     }
 
-    if (payload?.error) {
-      const rpcError = new Error(payload.error.message || "RPC returned an error");
-      rpcError.code = payload.error.code ?? "RPC_ERROR";
-      rpcError.data = payload.error.data;
+    const rpcErrorPayload = isRecord(payload) ? payload.error : undefined;
+    if (isRecord(rpcErrorPayload)) {
+      const message =
+        typeof rpcErrorPayload.message === "string"
+          ? rpcErrorPayload.message
+          : "RPC returned an error";
+      const rpcError = new Error(message) as Error & {
+        code?: unknown;
+        data?: unknown;
+      };
+      rpcError.code = rpcErrorPayload.code ?? "RPC_ERROR";
+      rpcError.data = rpcErrorPayload.data;
       throw rpcError;
     }
 
-    return payload?.result ?? payload;
+    return isRecord(payload) && "result" in payload ? payload.result : payload;
   } finally {
     clearTimeout(timeout);
   }
 }
 
+export interface RpcThrottleCollectorOptions {
+  rpcUrl: string;
+  historySize: number;
+  now?: () => number;
+  rpcCall?: RpcCall;
+  logger?: CollectorLogger;
+}
+
 export class RpcThrottleCollector {
+  readonly rpcUrl: string;
+  readonly history: HistoryStore<HistoryEntry>;
+  readonly now: () => number;
+  readonly rpcCall: RpcCall;
+  readonly logger: CollectorLogger;
+  latestEpochSecond: number | null;
+  collecting: boolean;
+  timer: ReturnType<typeof setInterval> | null;
+  readonly startedAt: string;
+
   constructor({
     rpcUrl,
     historySize,
     now = epochSecondNow,
     rpcCall = callThrottleController,
     logger = console,
-  }) {
+  }: RpcThrottleCollectorOptions) {
     this.rpcUrl = rpcUrl;
     this.history = new HistoryStore(historySize);
     this.now = now;
@@ -203,7 +330,7 @@ export class RpcThrottleCollector {
     this.startedAt = new Date().toISOString();
   }
 
-  start() {
+  start(): void {
     if (this.timer) {
       return;
     }
@@ -218,14 +345,14 @@ export class RpcThrottleCollector {
     this.timer = setInterval(run, POLL_INTERVAL_MS);
   }
 
-  stop() {
+  stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
   }
 
-  async collectDueSeconds() {
+  async collectDueSeconds(): Promise<void> {
     if (this.collecting) {
       return;
     }
@@ -255,7 +382,7 @@ export class RpcThrottleCollector {
     }
   }
 
-  async recordRpcResult(epochSecond) {
+  async recordRpcResult(epochSecond: number): Promise<void> {
     const key = secondKey(epochSecond);
     const startedAtMs = Date.now();
 
@@ -277,7 +404,7 @@ export class RpcThrottleCollector {
     }
   }
 
-  recordError(epochSecond, error, durationMs = 0) {
+  recordError(epochSecond: number, error: SerializedError, durationMs = 0): void {
     this.record(epochSecond, {
       ok: false,
       error,
@@ -285,7 +412,7 @@ export class RpcThrottleCollector {
     });
   }
 
-  record(epochSecond, entry) {
+  record(epochSecond: number, entry: NewHistoryEntry): void {
     const key = secondKey(epochSecond);
     this.history.set(key, {
       second: key,
@@ -296,7 +423,7 @@ export class RpcThrottleCollector {
     this.latestEpochSecond = epochSecond;
   }
 
-  status() {
+  status(): CollectorStatus {
     const currentSecond = this.now();
     return {
       ok: true,
@@ -316,7 +443,7 @@ export class RpcThrottleCollector {
   }
 }
 
-function jsonResponse(payload, status = 200) {
+function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload, null, 2), {
     status,
     headers: {
@@ -325,8 +452,8 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
-export function createHttpHandler(collector) {
-  return async function handleRequest(request) {
+export function createHttpHandler(collector: RpcThrottleCollector): HttpHandler {
+  return async function handleRequest(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url);
       const pathname = url.pathname.replace(/\/+$/, "") || "/";
@@ -434,7 +561,7 @@ export function createHttpHandler(collector) {
   };
 }
 
-function installProcessErrorHandlers(logger = console) {
+function installProcessErrorHandlers(logger: CollectorLogger = console): void {
   process.on("uncaughtException", (error) => {
     logger.error("uncaught exception", serializeError(error));
   });
@@ -444,12 +571,17 @@ function installProcessErrorHandlers(logger = console) {
   });
 }
 
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function main() {
+export async function main(): Promise<void> {
   installProcessErrorHandlers();
+
+  const bun = typeof Bun === "undefined" ? undefined : Bun;
+  if (!bun) {
+    throw new Error("Bun runtime is required to start the HTTP server");
+  }
 
   const config = createConfig();
   const collector = new RpcThrottleCollector({
@@ -460,7 +592,7 @@ export async function main() {
 
   while (true) {
     try {
-      const server = Bun.serve({
+      const server = bun.serve({
         port: config.listenPort,
         fetch: createHttpHandler(collector),
       });
@@ -481,7 +613,10 @@ export async function main() {
   }
 }
 
-if (typeof Bun !== "undefined" && import.meta.main) {
+const isBunMain =
+  typeof Bun !== "undefined" && (import.meta as ImportMeta & { main?: boolean }).main === true;
+
+if (isBunMain) {
   main().catch((error) => {
     console.error("collector main failed", serializeError(error));
   });

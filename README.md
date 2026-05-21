@@ -27,11 +27,16 @@ entries instead of crashing the process.
 | `HISTORY_SIZE` | `5000` | Number of datetime-second entries to retain. |
 | `COLLECTOR_LISTEN_PORT` | `28881` | HTTP API listen port. |
 
-## Run locally
+## Build and run locally
 
 ```sh
-bun src/collector.js
+npm install
+npm run build
+bun dist/collector.js
 ```
+
+The published package is built from TypeScript and exports `dist/collector.js`
+with matching declaration files.
 
 ## Run with Docker
 
