@@ -174,16 +174,17 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::model::{CollectorState, HistoryStore, record_locked};
+    use std::num::{NonZeroU16, NonZeroUsize};
     use std::sync::Mutex;
 
     fn test_shared() -> Arc<SharedCollector> {
         Arc::new(SharedCollector {
             config: Config {
                 rpc_url: "http://rpc.example".to_string(),
-                history_size: 10,
+                history_size: NonZeroUsize::new(10).unwrap(),
                 listen_host: "127.0.0.1".to_string(),
-                listen_port: 28881,
-                web_workers: 4,
+                listen_port: NonZeroU16::new(28881).unwrap(),
+                web_workers: NonZeroUsize::new(4).unwrap(),
             },
             state: Mutex::new(CollectorState {
                 history: HistoryStore::new(10),

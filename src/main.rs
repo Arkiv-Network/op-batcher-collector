@@ -12,10 +12,10 @@ fn main() {
     install_process_panic_handler();
 
     let config = create_config();
-    let worker_threads = config.web_workers;
+    let worker_threads = config.web_workers.get();
     let shared = Arc::new(SharedCollector {
         state: Mutex::new(CollectorState {
-            history: HistoryStore::new(config.history_size),
+            history: HistoryStore::new(config.history_size.get()),
             latest_epoch_second: None,
             collecting: false,
             started_at: now_iso_second(),

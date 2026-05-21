@@ -1,96 +1,96 @@
-use std::env;
+use std::num::{NonZeroU16, NonZeroUsize};
 
-pub const DEFAULT_RPC_URL: &str = "http://host.docker.internal:8548";
-pub const DEFAULT_HISTORY_SIZE: usize = 5000;
-pub const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
-pub const DEFAULT_LISTEN_PORT: u16 = 28881;
-pub const DEFAULT_WEB_WORKERS: usize = 4;
+use serde::Deserialize;
 
-#[derive(Clone, Debug)]
+const DEFAULT_RPC_URL: &str = "http://host.docker.internal:8548";
+const DEFAULT_LISTEN_HOST: &str = "0.0.0.0";
+const DEFAULT_HISTORY_SIZE: NonZeroUsize = NonZeroUsize::new(5000).unwrap();
+const DEFAULT_LISTEN_PORT: NonZeroU16 = NonZeroU16::new(28881).unwrap();
+const DEFAULT_WEB_WORKERS: NonZeroUsize = NonZeroUsize::new(4).unwrap();
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
+    #[serde(rename = "batcher_rpc_url", default = "default_rpc_url")]
     pub rpc_url: String,
-    pub history_size: usize,
+    #[serde(default = "default_history_size")]
+    pub history_size: NonZeroUsize,
+    #[serde(rename = "collector_listen_host", default = "default_listen_host")]
     pub listen_host: String,
-    pub listen_port: u16,
-    pub web_workers: usize,
+    #[serde(rename = "collector_listen_port", default = "default_listen_port")]
+    pub listen_port: NonZeroU16,
+    #[serde(rename = "collector_web_workers", default = "default_web_workers")]
+    pub web_workers: NonZeroUsize,
 }
 
 pub fn create_config() -> Config {
-    let rpc_url = env::var("BATCHER_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
-    let history_size = parse_positive_usize_env("HISTORY_SIZE", DEFAULT_HISTORY_SIZE);
-    let listen_host =
-        env::var("COLLECTOR_LISTEN_HOST").unwrap_or_else(|_| DEFAULT_LISTEN_HOST.to_string());
-    let listen_port = parse_positive_u16_env("COLLECTOR_LISTEN_PORT", DEFAULT_LISTEN_PORT);
-    let web_workers = parse_positive_usize_env("COLLECTOR_WEB_WORKERS", DEFAULT_WEB_WORKERS);
-
-    Config {
-        rpc_url,
-        history_size,
-        listen_host,
-        listen_port,
-        web_workers,
-    }
+    envy::from_env::<Config>().unwrap_or_else(|err| panic!("invalid config: {err}"))
 }
 
-fn parse_positive_usize_env(name: &str, fallback: usize) -> usize {
-    match env::var(name) {
-        Ok(raw) => parse_positive_usize(name, &raw),
-        Err(_) => fallback,
-    }
+fn default_rpc_url() -> String {
+    DEFAULT_RPC_URL.to_string()
 }
 
-fn parse_positive_u16_env(name: &str, fallback: u16) -> u16 {
-    match env::var(name) {
-        Ok(raw) => parse_positive_u16(name, &raw),
-        Err(_) => fallback,
-    }
+fn default_listen_host() -> String {
+    DEFAULT_LISTEN_HOST.to_string()
 }
 
-fn parse_positive_usize(name: &str, raw: &str) -> usize {
-    let parsed: usize = raw
-        .parse()
-        .unwrap_or_else(|_| panic!("{name} must be a positive integer, got {raw:?}"));
-    if parsed == 0 {
-        panic!("{name} must be greater than zero, got {raw:?}");
-    }
-    parsed
+fn default_history_size() -> NonZeroUsize {
+    DEFAULT_HISTORY_SIZE
 }
 
-fn parse_positive_u16(name: &str, raw: &str) -> u16 {
-    let parsed: u16 = raw.parse().unwrap_or_else(|_| {
-        panic!("{name} must be an integer between 1 and 65535, got {raw:?}")
-    });
-    if parsed == 0 {
-        panic!("{name} must be greater than zero, got {raw:?}");
-    }
-    parsed
+fn default_listen_port() -> NonZeroU16 {
+    DEFAULT_LISTEN_PORT
+}
+
+fn default_web_workers() -> NonZeroUsize {
+    DEFAULT_WEB_WORKERS
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_positive_values_accept_positive_integers() {
-        assert_eq!(parse_positive_usize("HISTORY_SIZE", "42"), 42);
-        assert_eq!(parse_positive_u16("COLLECTOR_LISTEN_PORT", "28881"), 28881);
+    fn from_pairs<const N: usize>(pairs: [(&str, &str); N]) -> Result<Config, envy::Error> {
+        envy::from_iter(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string())),
+        )
     }
 
     #[test]
-    #[should_panic(expected = "HISTORY_SIZE must be a positive integer")]
-    fn parse_positive_usize_panics_on_non_integer() {
-        parse_positive_usize("HISTORY_SIZE", "abc");
+    fn defaults_apply_when_env_is_empty() {
+        let config = from_pairs([]).unwrap();
+        assert_eq!(config.rpc_url, DEFAULT_RPC_URL);
+        assert_eq!(config.history_size, DEFAULT_HISTORY_SIZE);
+        assert_eq!(config.listen_host, DEFAULT_LISTEN_HOST);
+        assert_eq!(config.listen_port, DEFAULT_LISTEN_PORT);
+        assert_eq!(config.web_workers, DEFAULT_WEB_WORKERS);
     }
 
     #[test]
-    #[should_panic(expected = "HISTORY_SIZE must be greater than zero")]
-    fn parse_positive_usize_panics_on_zero() {
-        parse_positive_usize("HISTORY_SIZE", "0");
+    fn parses_valid_overrides() {
+        let config = from_pairs([
+            ("HISTORY_SIZE", "42"),
+            ("COLLECTOR_LISTEN_PORT", "9000"),
+        ])
+        .unwrap();
+        assert_eq!(config.history_size.get(), 42);
+        assert_eq!(config.listen_port.get(), 9000);
     }
 
     #[test]
-    #[should_panic(expected = "COLLECTOR_LISTEN_PORT must be an integer between 1 and 65535")]
-    fn parse_positive_u16_panics_on_overflow() {
-        parse_positive_u16("COLLECTOR_LISTEN_PORT", "70000");
+    fn rejects_non_integer() {
+        assert!(from_pairs([("HISTORY_SIZE", "abc")]).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_for_nonzero_field() {
+        assert!(from_pairs([("HISTORY_SIZE", "0")]).is_err());
+    }
+
+    #[test]
+    fn rejects_port_overflow() {
+        assert!(from_pairs([("COLLECTOR_LISTEN_PORT", "70000")]).is_err());
     }
 }
