@@ -1,0 +1,11 @@
+{
+  "name": "op-batcher-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/collector.js",
+    "test": "node --test test/*.node-test.mjs",
+    "check": "node --check src/collector.js"
+  }
+}
