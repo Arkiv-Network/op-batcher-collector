@@ -106,6 +106,44 @@ test("collector stores RPC failures as entries", async () => {
   assert.equal(entry.error.message, "rpc unavailable");
 });
 
+test("collector logs successful batcher responses with duration", async () => {
+  const logs = [];
+  const originalDateNow = Date.now;
+  let nowCallCount = 0;
+  Date.now = () => (nowCallCount++ === 0 ? 1_000 : 1_037);
+
+  try {
+    const collector = new RpcThrottleCollector({
+      rpcUrl: "http://rpc.example",
+      historySize: 10,
+      rpcCall: async () => ({ value: "stored" }),
+      logger: {
+        error() {},
+        log(...args) {
+          logs.push(args);
+        },
+      },
+    });
+
+    await collector.recordRpcResult(250);
+
+    const entry = collector.history.get(secondKey(250));
+    assert.equal(entry.ok, true);
+    assert.equal(entry.durationMs, 37);
+    assert.equal(logs.length, 1);
+    assert.deepEqual(logs[0], [
+      "batcher response ok",
+      {
+        second: secondKey(250),
+        durationMs: 37,
+        rpcUrl: "http://rpc.example",
+      },
+    ]);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("callThrottleController sends the expected JSON-RPC request", async () => {
   let rpcRequest = null;
   const server = await withJsonServer((request, response) => {

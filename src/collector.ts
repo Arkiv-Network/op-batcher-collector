@@ -58,6 +58,7 @@ export type RpcCall = (request: RpcCallRequest) => Promise<unknown>;
 
 export interface CollectorLogger {
   error: (...args: unknown[]) => void;
+  log?: (...args: unknown[]) => void;
 }
 
 export interface CollectorStatus {
@@ -397,11 +398,17 @@ export class RpcThrottleCollector {
         second: epochSecond,
         secondKey: key,
       });
+      const durationMs = Date.now() - startedAtMs;
 
       this.record(epochSecond, {
         ok: true,
         result,
-        durationMs: Date.now() - startedAtMs,
+        durationMs,
+      });
+      this.logger.log?.("batcher response ok", {
+        second: key,
+        durationMs,
+        rpcUrl: this.rpcUrl,
       });
     } catch (error) {
       this.recordError(epochSecond, serializeError(error), Date.now() - startedAtMs);
