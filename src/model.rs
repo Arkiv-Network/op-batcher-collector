@@ -42,6 +42,7 @@ pub struct CollectorState {
 #[derive(Debug)]
 pub struct SharedCollector {
     pub config: Config,
+    pub http_client: reqwest::Client,
     pub state: Mutex<CollectorState>,
 }
 
@@ -107,7 +108,9 @@ impl HistoryEntry {
             "durationMs": self.duration_ms.to_string(),
             "ok": self.ok,
         });
-        let map = value.as_object_mut().expect("history entry serializes as object");
+        let map = value
+            .as_object_mut()
+            .expect("history entry serializes as object");
         if self.ok {
             map.insert(
                 "result".to_string(),

@@ -9,9 +9,7 @@ use axum::routing::get;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
-use crate::model::{
-    SharedCollector, epoch_second_now, normalize_second, second_key,
-};
+use crate::model::{SharedCollector, epoch_second_now, normalize_second, second_key};
 
 pub async fn run_server(shared: Arc<SharedCollector>) {
     let bind_address = format!(
@@ -186,6 +184,7 @@ mod tests {
                 listen_port: NonZeroU16::new(28881).unwrap(),
                 web_workers: NonZeroUsize::new(4).unwrap(),
             },
+            http_client: reqwest::Client::new(),
             state: Mutex::new(CollectorState {
                 history: HistoryStore::new(10),
                 latest_epoch_second: Some(300),
@@ -211,9 +210,11 @@ mod tests {
             );
         }
 
-        let (status, Json(body)) =
-            history_lookup_handler(State(shared.clone()), Path("1970-01-01T00:05:00Z".to_string()))
-                .await;
+        let (status, Json(body)) = history_lookup_handler(
+            State(shared.clone()),
+            Path("1970-01-01T00:05:00Z".to_string()),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], json!(true));

@@ -70,11 +70,8 @@ mod tests {
 
     #[test]
     fn parses_valid_overrides() {
-        let config = from_pairs([
-            ("HISTORY_SIZE", "42"),
-            ("COLLECTOR_LISTEN_PORT", "9000"),
-        ])
-        .unwrap();
+        let config =
+            from_pairs([("HISTORY_SIZE", "42"), ("COLLECTOR_LISTEN_PORT", "9000")]).unwrap();
         assert_eq!(config.history_size.get(), 42);
         assert_eq!(config.listen_port.get(), 9000);
     }
