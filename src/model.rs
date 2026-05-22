@@ -21,7 +21,6 @@ pub struct ErrorInfo {
 pub struct HistoryEntry {
     pub second: String,
     pub collected_at: String,
-    pub rpc_url: String,
     pub duration_ms: u128,
     pub ok: bool,
     pub result: Option<Value>,
@@ -107,7 +106,6 @@ impl HistoryEntry {
         let mut value = json!({
             "second": self.second,
             "collectedAt": self.collected_at,
-            "rpcUrl": self.rpc_url,
             "durationMs": self.duration_ms.to_string(),
             "ok": self.ok,
         });
@@ -133,7 +131,6 @@ impl HistoryEntry {
 }
 
 pub fn record_locked(
-    rpc_url: &str,
     state: &mut CollectorState,
     epoch_second: i64,
     ok: bool,
@@ -145,7 +142,6 @@ pub fn record_locked(
     state.history.set(HistoryEntry {
         second: key,
         collected_at: now_iso_second(),
-        rpc_url: rpc_url.to_string(),
         duration_ms,
         ok,
         result,
@@ -221,7 +217,6 @@ mod tests {
             history.set(HistoryEntry {
                 second: second_key(second),
                 collected_at: second_key(second),
-                rpc_url: "http://rpc.example".to_string(),
                 duration_ms: 0,
                 ok: true,
                 result: Some(json!({})),

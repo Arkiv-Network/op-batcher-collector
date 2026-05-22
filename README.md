@@ -16,7 +16,6 @@ Entries are retained by second:
   "2026-05-21T10:00:00Z": {
     "second": "2026-05-21T10:00:00Z",
     "collectedAt": "2026-05-21T10:00:00Z",
-    "rpcUrl": "http://host.docker.internal:8548",
     "durationMs": "12",
     "ok": true,
     "result": {}

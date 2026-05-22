@@ -45,7 +45,6 @@ async fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
 
         for epoch_second in start_second..current_second {
             record_locked(
-                &shared.config.rpc_url,
                 &mut state,
                 epoch_second,
                 false,
@@ -74,7 +73,6 @@ async fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
     match rpc_result {
         Ok(result) => {
             record_locked(
-                &shared.config.rpc_url,
                 &mut state,
                 current_second,
                 true,
@@ -93,7 +91,6 @@ async fn collect_due_seconds(shared: &SharedCollector) -> Result<(), String> {
         }
         Err(error) => {
             record_locked(
-                &shared.config.rpc_url,
                 &mut state,
                 current_second,
                 false,

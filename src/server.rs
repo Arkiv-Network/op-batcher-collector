@@ -63,7 +63,6 @@ async fn status_handler(State(shared): State<Arc<SharedCollector>>) -> Json<Valu
 
     Json(json!({
         "ok": true,
-        "rpcUrl": shared.config.rpc_url,
         "historySize": state.history.limit,
         "retainedEntries": state.history.entries.len(),
         "oldestSecond": state.history.oldest_key(),
@@ -200,7 +199,6 @@ mod tests {
         {
             let mut state = shared.state.lock().unwrap();
             record_locked(
-                "http://rpc.example",
                 &mut state,
                 300,
                 true,
