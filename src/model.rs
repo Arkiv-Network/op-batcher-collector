@@ -3,6 +3,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
 
 use crate::config::Config;
 
@@ -163,13 +166,11 @@ pub fn now_iso_second() -> String {
 }
 
 pub fn second_key(epoch_second: i64) -> String {
-    let days = epoch_second.div_euclid(86_400);
-    let second_of_day = epoch_second.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    let hour = second_of_day / 3600;
-    let minute = (second_of_day % 3600) / 60;
-    let second = second_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    let format = format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    OffsetDateTime::from_unix_timestamp(epoch_second)
+        .expect("epoch second within OffsetDateTime range")
+        .format(&format)
+        .expect("format infallible for fixed description")
 }
 
 pub fn normalize_second(value: &str) -> Option<String> {
@@ -177,123 +178,12 @@ pub fn normalize_second(value: &str) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    if raw
-        .chars()
-        .all(|character| character == '-' || character.is_ascii_digit())
-        && raw.chars().filter(|character| *character == '-').count() <= 1
-        && !raw[1.min(raw.len())..].contains('-')
-    {
-        return raw.parse::<i64>().ok().map(second_key);
+    if let Ok(epoch) = raw.parse::<i64>() {
+        return Some(second_key(epoch));
     }
-    parse_iso_epoch_second(raw).map(second_key)
-}
-
-fn parse_iso_epoch_second(raw: &str) -> Option<i64> {
-    let bytes = raw.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-
-    let year = parse_digits(bytes, 0, 4)? as i32;
-    expect_byte(bytes, 4, b'-')?;
-    let month = parse_digits(bytes, 5, 2)? as i32;
-    expect_byte(bytes, 7, b'-')?;
-    let day = parse_digits(bytes, 8, 2)? as i32;
-    if bytes.get(10) != Some(&b'T') && bytes.get(10) != Some(&b' ') {
-        return None;
-    }
-    let hour = parse_digits(bytes, 11, 2)?;
-    expect_byte(bytes, 13, b':')?;
-    let minute = parse_digits(bytes, 14, 2)?;
-    expect_byte(bytes, 16, b':')?;
-    let second = parse_digits(bytes, 17, 2)?;
-    let mut index = 19;
-
-    if bytes.get(index) == Some(&b'.') {
-        index += 1;
-        while bytes
-            .get(index)
-            .map(|byte| byte.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            index += 1;
-        }
-    }
-
-    let offset_seconds = match bytes.get(index) {
-        Some(b'Z') | Some(b'z') => {
-            index += 1;
-            0
-        }
-        Some(b'+') | Some(b'-') => {
-            let sign = if bytes[index] == b'+' { 1 } else { -1 };
-            let offset_hour = parse_digits(bytes, index + 1, 2)?;
-            let next = index + 3;
-            let (offset_minute, end) = if bytes.get(next) == Some(&b':') {
-                (parse_digits(bytes, next + 1, 2)?, next + 3)
-            } else {
-                (parse_digits(bytes, next, 2)?, next + 2)
-            };
-            index = end;
-            sign * ((offset_hour * 3600) + (offset_minute * 60))
-        }
-        None => 0,
-        _ => return None,
-    };
-
-    if index != bytes.len() {
-        return None;
-    }
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 59
-    {
-        return None;
-    }
-
-    let days = days_from_civil(year, month, day);
-    Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds)
-}
-
-fn parse_digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
-    let slice = bytes.get(start..start + len)?;
-    if !slice.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    std::str::from_utf8(slice).ok()?.parse::<i64>().ok()
-}
-
-fn expect_byte(bytes: &[u8], index: usize, expected: u8) -> Option<()> {
-    (bytes.get(index) == Some(&expected)).then_some(())
-}
-
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let days = days + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year + if month <= 2 { 1 } else { 0 };
-    (year, month, day)
-}
-
-fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
-    let year = year as i64 - if month <= 2 { 1 } else { 0 };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month = month as i64;
-    let day = day as i64;
-    let month_prime = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    OffsetDateTime::parse(raw, &Rfc3339)
+        .ok()
+        .map(|dt| second_key(dt.unix_timestamp()))
 }
 
 #[cfg(test)]
