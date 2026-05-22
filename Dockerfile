@@ -1,16 +1,14 @@
-# Previous runtime reference: oven/bun:1
-
-FROM rust:1-slim AS build
+FROM rust:1-alpine3.23 AS build
 
 WORKDIR /app
+
+RUN apk add --no-cache musl-dev
 
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 RUN cargo build --release --locked
 
-FROM debian:bookworm-slim
-
-WORKDIR /app
+FROM alpine:3.23
 
 COPY --from=build /app/target/release/op-batcher-collector /usr/local/bin/op-batcher-collector
 
