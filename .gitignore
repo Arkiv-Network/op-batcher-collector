@@ -1,7 +1,7 @@
-dist
 node_modules
 npm-debug.log
 *.log
+dist
 target
 .idea
 .claude
