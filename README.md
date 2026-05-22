@@ -1,13 +1,13 @@
 # op-batcher-collector
 
-Standard-library Rust collector for the `admin_getThrottleController` JSON-RPC
-method.
+Async collector for the `admin_getThrottleController` JSON-RPC method.
 
-The collector uses two long-running threads:
+Built on tokio + axum + reqwest. A single multi-threaded tokio runtime hosts
+two long-running tasks that share the worker pool:
 
-- a query thread that polls the configured JSON-RPC endpoint once per UTC
+- a poll task that calls the configured JSON-RPC endpoint once per UTC
   datetime second
-- a web thread that serves the HTTP API and spawns short-lived request handlers
+- an axum HTTP server that exposes the read API
 
 Entries are retained by second:
 
@@ -15,11 +15,17 @@ Entries are retained by second:
 {
   "2026-05-21T10:00:00Z": {
     "second": "2026-05-21T10:00:00Z",
+    "collectedAt": "2026-05-21T10:00:00Z",
+    "rpcUrl": "http://host.docker.internal:8548",
+    "durationMs": "12",
     "ok": true,
     "result": {}
   }
 }
 ```
+
+Failed seconds carry the same envelope with `"ok": false` and an `error` object
+(`message`, optional `code`, `status`, `body`) instead of `result`.
 
 If polling falls behind, the collector writes error entries for missed seconds
 so the retained timeline has no empty seconds. RPC failures are stored as error
@@ -33,6 +39,10 @@ entries instead of crashing the process.
 | `HISTORY_SIZE` | `5000` | Number of datetime-second entries to retain. |
 | `COLLECTOR_LISTEN_HOST` | `0.0.0.0` | HTTP API listen host. |
 | `COLLECTOR_LISTEN_PORT` | `28881` | HTTP API listen port. |
+| `COLLECTOR_WEB_WORKERS` | `4` | Worker threads in the tokio runtime. |
+
+Integer variables must be positive; zero or out-of-range values cause the
+process to panic at startup with a message naming the variable.
 
 ## Build and run locally
 
@@ -41,9 +51,10 @@ cargo build --release
 ./target/release/op-batcher-collector
 ```
 
-The RPC client intentionally uses only Rust's standard library, so
-`BATCHER_RPC_URL` must use `http://`. TLS-backed `https://` RPC endpoints need a
-local plain-HTTP proxy or a future implementation that permits TLS crates.
+`reqwest` is compiled without TLS features, so `BATCHER_RPC_URL` must use
+`http://`. To target an `https://` endpoint, enable a TLS feature on the
+`reqwest` dependency (e.g. `rustls-tls`) or front the RPC with a local
+plain-HTTP proxy.
 
 ## Run with Docker
 
@@ -75,8 +86,9 @@ docker run --rm -p 28881:28881 \
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /health` | Collector status and retained range. |
-| `GET /status` | Alias for `/health`. |
+| `GET /` | Collector status and retained range. |
+| `GET /health` | Alias for `/`. |
+| `GET /status` | Alias for `/`. |
 | `GET /latest` | Latest retained entry. |
 | `GET /history` | Full retained history keyed by datetime second. |
 | `GET /history?second=2026-05-21T10:00:00Z` | Lookup one retained second. |
