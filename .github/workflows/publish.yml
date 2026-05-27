@@ -105,10 +105,9 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           name="op-batcher-collector-${tag}-linux-amd64"
-          mkdir -p "dist/${name}"
-          cp target/x86_64-unknown-linux-musl/release/op-batcher-collector "dist/${name}/"
-          cp README.md LICENSE* "dist/${name}/" 2>/dev/null || true
-          tar -C dist -cJf "${name}.tar.xz" "${name}"
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/op-batcher-collector dist/
+          tar -C dist -cJf "${name}.tar.xz" op-batcher-collector
           sha256sum "${name}.tar.xz" > "${name}.tar.xz.sha256"
           echo "archive=${name}.tar.xz" >> "$GITHUB_OUTPUT"
           echo "checksum=${name}.tar.xz.sha256" >> "$GITHUB_OUTPUT"
