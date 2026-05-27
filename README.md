@@ -50,6 +50,15 @@ cargo build --release
 ./target/release/op-batcher-collector
 ```
 
+Print the collector version with `-v` or `--version`:
+
+```sh
+./target/release/op-batcher-collector --version
+```
+
+Runtime configuration is environment-variable only. Any other command-line
+argument exits with an error that points users back to environment variables.
+
 `reqwest` is compiled without TLS features, so `BATCHER_RPC_URL` must use
 `http://`. To target an `https://` endpoint, enable a TLS feature on the
 `reqwest` dependency (e.g. `rustls-tls`) or front the RPC with a local
